@@ -38,7 +38,7 @@ func InitDB(config *config.Config) {
 	}
 
 	if err == nil {
-		if os.Getenv("DEBUG") != "" {
+		if config.Server.Debug {
 			DB.LogMode(true)
 		}
 

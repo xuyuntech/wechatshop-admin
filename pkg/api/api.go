@@ -102,7 +102,9 @@ func (a *api) Run() error {
 		Modes: []string{"menu_item", "edit"},
 	})
 
+	mux.Handle("/", Router())
 	aAdmin.MountTo("/admin", mux)
+
 	logrus.Debugf("Listening on: %v\n", a.listen)
 	return http.ListenAndServe(a.listen, middlewares.Apply(mux))
 }

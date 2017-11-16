@@ -13,6 +13,8 @@ cmd/main.go 是入口, 运行如下命令即可开启服务，cmd 目录下(conf
 $ go run main.go 
 ```
 
+项目启动后，访问 `localhost:8088/admin` 即可打开后台管理的界面, 端口可以在 `config.yml` 里配置
+
 pkg 包说明
 ====
 * `api` 业务相关的 api 接口

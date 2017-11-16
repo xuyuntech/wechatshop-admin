@@ -3,10 +3,14 @@ A Shop for TongRenTang E-Business
 
 后端部分
 ---
-cmd/main.go 是入口, 运行如下命令即可开启服务, cmd 目录下(configy.yml 是配置文件)：
+先开启本地数据库
 ```
-$ make db    #docker 方式运行 mysql 数据库
-$ go run main.go
+$ make db    #docker 方式运行 mysql 数据库, 数据存在 db_data 里
+```
+
+cmd/main.go 是入口, 运行如下命令即可开启服务，cmd 目录下(configy.yml 是配置文件)
+```
+$ go run main.go 
 ```
 
 pkg 包说明

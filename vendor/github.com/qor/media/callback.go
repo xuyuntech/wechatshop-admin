@@ -3,6 +3,7 @@ package media
 import (
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"reflect"
 
 	"github.com/jinzhu/gorm"
@@ -15,12 +16,12 @@ func cropField(field *gorm.Field, scope *gorm.Scope) (cropped bool) {
 		if media, ok := field.Field.Addr().Interface().(Media); ok && !media.Cropped() {
 			option := parseTagOption(field.Tag.Get("media_library"))
 			if media.GetFileHeader() != nil || media.NeedCrop() {
-				var mediaFile FileInterface
+				var file multipart.File
 				var err error
 				if fileHeader := media.GetFileHeader(); fileHeader != nil {
-					mediaFile, err = media.GetFileHeader().Open()
+					file, err = media.GetFileHeader().Open()
 				} else {
-					mediaFile, err = media.Retrieve(media.URL("original"))
+					file, err = media.Retrieve(media.URL("original"))
 				}
 
 				if err != nil {
@@ -37,13 +38,13 @@ func cropField(field *gorm.Field, scope *gorm.Scope) (cropped bool) {
 					media.Scan(string(result))
 				}
 
-				if mediaFile != nil {
-					defer mediaFile.Close()
+				if file != nil {
+					defer file.Close()
 					var handled = false
 					for _, handler := range mediaHandlers {
 						if handler.CouldHandle(media) {
-							mediaFile.Seek(0, 0)
-							if scope.Err(handler.Handle(media, mediaFile, option)) == nil {
+							file.Seek(0, 0)
+							if scope.Err(handler.Handle(media, file, option)) == nil {
 								handled = true
 							}
 						}
@@ -51,7 +52,7 @@ func cropField(field *gorm.Field, scope *gorm.Scope) (cropped bool) {
 
 					// Save File
 					if !handled {
-						scope.Err(media.Store(media.URL(), option, mediaFile))
+						scope.Err(media.Store(media.URL(), option, file))
 					}
 				}
 				return true

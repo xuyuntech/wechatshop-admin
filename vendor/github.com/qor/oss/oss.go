@@ -8,12 +8,11 @@ import (
 
 // StorageInterface define common API to operate storage
 type StorageInterface interface {
+	GetURL(path string) (string, error)
 	Get(path string) (*os.File, error)
-	GetStream(path string) (io.ReadCloser, error)
 	Put(path string, reader io.Reader) (*Object, error)
 	Delete(path string) error
 	List(path string) ([]*Object, error)
-	GetURL(path string) (string, error)
 	GetEndpoint() string
 }
 

@@ -92,3 +92,5 @@ bundle/
 
 # 发布系统 node 版本太低
 package-lock.json
+
+cmd/public

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jinzhu/gorm"
+	"github.com/qor/l10n"
 )
 
 func initalizePosition(scope *gorm.Scope) {
@@ -25,7 +26,7 @@ func reorderPositions(scope *gorm.Scope) {
 			var additionalSQL []string
 			var additionalValues []interface{}
 			// with l10n
-			if locale, ok := scope.DB().Get("l10n:locale"); ok && locale.(string) != "" {
+			if locale, ok := scope.DB().Get("l10n:locale"); ok && locale.(string) != "" && l10n.IsLocalizable(scope) {
 				additionalSQL = append(additionalSQL, "language_code = ?")
 				additionalValues = append(additionalValues, locale)
 			}
@@ -36,7 +37,12 @@ func reorderPositions(scope *gorm.Scope) {
 				additionalSQL = append(additionalSQL, "deleted_at IS NULL")
 			}
 
-			var sql = fmt.Sprintf("UPDATE %v SET position = (SELECT COUNT(pos) + 1 FROM (SELECT DISTINCT(position) AS pos FROM %v WHERE %v) AS t2 WHERE t2.pos < %v.position) WHERE %v", table, table, strings.Join(additionalSQL, " AND "), table, strings.Join(additionalSQL, " AND "))
+			var sql string
+			if len(additionalSQL) > 0 {
+				sql = fmt.Sprintf("UPDATE %v SET position = (SELECT COUNT(pos) + 1 FROM (SELECT DISTINCT(position) AS pos FROM %v WHERE %v) AS t2 WHERE t2.pos < %v.position) WHERE %v", table, table, strings.Join(additionalSQL, " AND "), table, strings.Join(additionalSQL, " AND "))
+			} else {
+				sql = fmt.Sprintf("UPDATE %v SET position = (SELECT COUNT(pos) + 1 FROM (SELECT DISTINCT(position) AS pos FROM %v) AS t2 WHERE t2.pos < %v.position)", table, table, table)
+			}
 			if scope.NewDB().Exec(sql, additionalValues...).Error == nil {
 				// Create Publish Event
 				createPublishEvent(scope.DB(), scope.Value)

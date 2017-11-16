@@ -1,23 +1,20 @@
 package oss
 
 import (
-	"bytes"
 	"io"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/qor/media"
 	"github.com/qor/oss"
 	"github.com/qor/oss/filesystem"
-	"github.com/qor/qor/utils"
 )
 
 var (
-	// URLTemplate default URL template
-	URLTemplate = "/system/{{class}}/{{primary_key}}/{{column}}/{{filename_with_hash}}"
 	// Storage the storage used to save medias
 	Storage oss.StorageInterface = filesystem.New("public")
-	_       media.Media          = &OSS{}
+	// URLTemplate default URL template
+	URLTemplate = "/system/{{class}}/{{primary_key}}/{{column}}/{{filename_with_hash}}"
 )
 
 // OSS common storage interface
@@ -61,25 +58,12 @@ func (o OSS) Store(path string, option *media.Option, reader io.Reader) error {
 }
 
 // DefaultRetrieveHandler used to retrieve file
-var DefaultRetrieveHandler = func(oss OSS, path string) (media.FileInterface, error) {
-	result, err := Storage.GetStream(path)
-	if f, ok := result.(media.FileInterface); ok {
-		return f, err
-	}
-
-	if err == nil {
-		buf := []byte{}
-		if buf, err = ioutil.ReadAll(result); err == nil {
-			result := utils.ClosingReadSeeker{bytes.NewReader(buf)}
-			result.Seek(0, 0)
-			return result, err
-		}
-	}
-	return nil, err
+var DefaultRetrieveHandler = func(oss OSS, path string) (*os.File, error) {
+	return Storage.Get(path)
 }
 
 // Retrieve retrieve file content with url
-func (o OSS) Retrieve(path string) (media.FileInterface, error) {
+func (o OSS) Retrieve(path string) (*os.File, error) {
 	return DefaultRetrieveHandler(o, path)
 }
 

@@ -38,11 +38,6 @@ func (fileSystem FileSystem) Get(path string) (*os.File, error) {
 	return os.Open(fileSystem.GetFullPath(path))
 }
 
-// GetStream get file as stream
-func (fileSystem FileSystem) GetStream(path string) (io.ReadCloser, error) {
-	return os.Open(fileSystem.GetFullPath(path))
-}
-
 // Put store a reader into given path
 func (fileSystem FileSystem) Put(path string, reader io.Reader) (*oss.Object, error) {
 	var (
@@ -103,7 +98,6 @@ func (fileSystem FileSystem) GetEndpoint() string {
 	return "/"
 }
 
-// GetURL get public accessible URL
 func (fileSystem FileSystem) GetURL(path string) (url string, err error) {
-	return path, nil
+	return
 }

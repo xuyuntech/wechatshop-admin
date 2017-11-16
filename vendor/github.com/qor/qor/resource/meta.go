@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/jinzhu/gorm"
-	"github.com/jinzhu/now"
 	"github.com/qor/qor"
 	"github.com/qor/qor/utils"
 	"github.com/qor/roles"
+	"github.com/qor/validations"
 )
 
 // Metaor interface
@@ -25,6 +25,7 @@ type Metaor interface {
 	GetValuer() func(interface{}, *qor.Context) interface{}
 	GetResource() Resourcer
 	GetMetas() []Metaor
+	SetPermission(*roles.Permission)
 	HasPermission(roles.PermissionMode, *qor.Context) bool
 }
 
@@ -38,21 +39,36 @@ type ConfigureMetaInterface interface {
 	ConfigureQorMeta(Metaor)
 }
 
+// MetaConfigInterface meta configuration interface
+type MetaConfigInterface interface {
+	ConfigureMetaInterface
+}
+
+// MetaConfig base meta config struct
+type MetaConfig struct {
+}
+
+// ConfigureQorMeta implement the MetaConfigInterface
+func (MetaConfig) ConfigureQorMeta(Metaor) {
+}
+
 // Meta meta struct definition
 type Meta struct {
 	Name            string
 	FieldName       string
+	FieldStruct     *gorm.StructField
 	Setter          func(resource interface{}, metaValue *MetaValue, context *qor.Context)
 	Valuer          func(interface{}, *qor.Context) interface{}
 	FormattedValuer func(interface{}, *qor.Context) interface{}
-	Permission      *roles.Permission
+	Config          MetaConfigInterface
+	BaseResource    Resourcer
 	Resource        Resourcer
-	FieldStruct     *gorm.StructField
+	Permission      *roles.Permission
 }
 
 // GetBaseResource get base resource from meta
 func (meta Meta) GetBaseResource() Resourcer {
-	return meta.Resource
+	return meta.BaseResource
 }
 
 // GetName get meta's name
@@ -108,7 +124,11 @@ func (meta Meta) HasPermission(mode roles.PermissionMode, context *qor.Context) 
 	if meta.Permission == nil {
 		return true
 	}
-	return meta.Permission.HasPermission(mode, context.Roles...)
+	var roles = []interface{}{}
+	for _, role := range context.Roles {
+		roles = append(roles, role)
+	}
+	return meta.Permission.HasPermission(mode, roles...)
 }
 
 // SetPermission set permission for meta
@@ -145,9 +165,9 @@ func (meta *Meta) PreInitialize() error {
 	}
 
 	var nestedField = strings.Contains(meta.FieldName, ".")
-	var scope = &gorm.Scope{Value: meta.Resource.GetResource().Value}
+	var scope = &gorm.Scope{Value: meta.BaseResource.GetResource().Value}
 	if nestedField {
-		subModel, name := parseNestedField(reflect.ValueOf(meta.Resource.GetResource().Value), meta.FieldName)
+		subModel, name := parseNestedField(reflect.ValueOf(meta.BaseResource.GetResource().Value), meta.FieldName)
 		meta.FieldStruct = getField(scope.New(subModel.Interface()).GetStructFields(), name)
 	} else {
 		meta.FieldStruct = getField(scope.GetStructFields(), meta.FieldName)
@@ -183,8 +203,16 @@ func (meta *Meta) Initialize() error {
 				}
 
 				if f, ok := scope.FieldByName(fieldName); ok {
-					if f.Relationship != nil && f.Field.CanAddr() && !scope.PrimaryKeyZero() {
-						context.GetDB().Model(value).Related(f.Field.Addr().Interface(), meta.FieldName)
+					if relationship := f.Relationship; relationship != nil && f.Field.CanAddr() && !scope.PrimaryKeyZero() {
+						if (relationship.Kind == "has_many" || relationship.Kind == "many_to_many") && f.Field.Len() == 0 {
+							context.GetDB().Model(value).Related(f.Field.Addr().Interface(), meta.FieldName)
+						} else if (relationship.Kind == "has_one" || relationship.Kind == "belongs_to") && context.GetDB().NewScope(f.Field.Interface()).PrimaryKeyZero() {
+							if f.Field.Kind() == reflect.Ptr && f.Field.IsNil() {
+								f.Field.Set(reflect.New(f.Field.Type().Elem()))
+							}
+
+							context.GetDB().Model(value).Related(f.Field.Addr().Interface(), meta.FieldName)
+						}
 					}
 
 					return f.Field.Interface()
@@ -193,7 +221,7 @@ func (meta *Meta) Initialize() error {
 				return ""
 			}
 		} else {
-			utils.ExitWithMsg("Unsupported meta name %v for resource %v", meta.FieldName, reflect.TypeOf(meta.Resource.GetResource().Value))
+			utils.ExitWithMsg("Meta %v is not supported for resource %v, no `Valuer` configured for it", meta.FieldName, reflect.TypeOf(meta.BaseResource.GetResource().Value))
 		}
 	}
 
@@ -232,6 +260,8 @@ func (meta *Meta) Initialize() error {
 					}
 
 					if len(primaryKeys) > 0 {
+						// set current field value to blank and replace it with new value
+						field.Set(reflect.Zero(field.Type()))
 						context.GetDB().Where(primaryKeys).Find(field.Addr().Interface())
 					}
 
@@ -250,8 +280,17 @@ func (meta *Meta) Initialize() error {
 					return
 				}
 
-				value := metaValue.Value
-				fieldName := meta.FieldName
+				var (
+					value     = metaValue.Value
+					fieldName = meta.FieldName
+				)
+
+				defer func() {
+					if r := recover(); r != nil {
+						context.AddError(validations.NewError(resource, meta.Name, fmt.Sprintf("Can't set value %v", value)))
+					}
+				}()
+
 				if nestedField {
 					fields := strings.Split(fieldName, ".")
 					fieldName = fields[len(fields)-1]
@@ -259,8 +298,13 @@ func (meta *Meta) Initialize() error {
 
 				field := reflect.Indirect(reflect.ValueOf(resource)).FieldByName(fieldName)
 				if field.Kind() == reflect.Ptr {
-					if field.IsNil() {
+					if field.IsNil() && utils.ToString(value) != "" {
 						field.Set(utils.NewValue(field.Type()).Elem())
+					}
+
+					if utils.ToString(value) == "" {
+						field.Set(reflect.Zero(field.Type()))
+						return
 					}
 
 					for field.Kind() == reflect.Ptr {
@@ -285,8 +329,16 @@ func (meta *Meta) Initialize() error {
 						}
 					default:
 						if scanner, ok := field.Addr().Interface().(sql.Scanner); ok {
+							if value == nil && len(metaValue.MetaValues.Values) > 0 {
+								decodeMetaValuesToField(meta.Resource, field, metaValue, context)
+								return
+							}
+
 							if scanner.Scan(value) != nil {
-								scanner.Scan(utils.ToString(value))
+								if err := scanner.Scan(utils.ToString(value)); err != nil {
+									context.AddError(err)
+									return
+								}
 							}
 						} else if reflect.TypeOf("").ConvertibleTo(field.Type()) {
 							field.Set(reflect.ValueOf(utils.ToString(value)).Convert(field.Type()))
@@ -296,9 +348,11 @@ func (meta *Meta) Initialize() error {
 							field.Set(rvalue.Convert(field.Type()))
 						} else if _, ok := field.Addr().Interface().(*time.Time); ok {
 							if str := utils.ToString(value); str != "" {
-								if newTime, err := now.Parse(str); err == nil {
+								if newTime, err := utils.ParseTime(str, context); err == nil {
 									field.Set(reflect.ValueOf(newTime))
 								}
+							} else {
+								field.Set(reflect.Zero(field.Type()))
 							}
 						} else {
 							var buf = bytes.NewBufferString("")
@@ -332,9 +386,9 @@ func getNestedModel(value interface{}, fieldName string, context *qor.Context) i
 	for _, field := range fields[:len(fields)-1] {
 		if model.CanAddr() {
 			submodel := model.FieldByName(field)
-			if key := submodel.FieldByName("Id"); !key.IsValid() || key.Uint() == 0 {
+			if context.GetDB().NewRecord(submodel.Interface()) && !context.GetDB().NewRecord(model.Addr().Interface()) {
 				if submodel.CanAddr() {
-					context.GetDB().Model(model.Addr().Interface()).Related(submodel.Addr().Interface())
+					context.GetDB().Model(model.Addr().Interface()).Association(field).Find(submodel.Addr().Interface())
 					model = submodel
 				} else {
 					break

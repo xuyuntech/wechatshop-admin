@@ -1,11 +1,13 @@
 package resource
 
 import (
+	"database/sql"
 	"errors"
 	"reflect"
 
 	"github.com/jinzhu/gorm"
 	"github.com/qor/qor"
+	"github.com/qor/qor/utils"
 	"github.com/qor/roles"
 )
 
@@ -41,20 +43,22 @@ func (processor *processor) checkSkipLeft(errs ...error) bool {
 	return processor.SkipLeft
 }
 
+// Initialize initialize a processor
 func (processor *processor) Initialize() error {
 	err := processor.Resource.CallFindOne(processor.Result, processor.MetaValues, processor.Context)
 	processor.checkSkipLeft(err)
 	return err
 }
 
+// Validate run validators
 func (processor *processor) Validate() error {
 	var errors qor.Errors
 	if processor.checkSkipLeft() {
 		return nil
 	}
 
-	for _, fc := range processor.Resource.GetResource().validators {
-		if errors.AddError(fc(processor.Result, processor.MetaValues, processor.Context)); !errors.HasError() {
+	for _, v := range processor.Resource.GetResource().Validators {
+		if errors.AddError(v.Handler(processor.Result, processor.MetaValues, processor.Context)); !errors.HasError() {
 			if processor.checkSkipLeft(errors.GetErrors()...) {
 				break
 			}
@@ -65,6 +69,10 @@ func (processor *processor) Validate() error {
 
 func (processor *processor) decode() (errors []error) {
 	if processor.checkSkipLeft() || processor.MetaValues == nil {
+		return
+	}
+
+	if destroy := processor.MetaValues.Get("_destroy"); destroy != nil {
 		return
 	}
 
@@ -82,39 +90,14 @@ func (processor *processor) decode() (errors []error) {
 
 		if setter := meta.GetSetter(); setter != nil {
 			setter(processor.Result, metaValue, processor.Context)
-			continue
 		}
 
-		res := metaValue.Meta.GetResource()
-		if res == nil {
-			continue
-		}
-
-		field := reflect.Indirect(reflect.ValueOf(processor.Result)).FieldByName(meta.GetFieldName())
-		if field.Kind() == reflect.Struct {
-			value := reflect.New(field.Type())
-			associationProcessor := DecodeToResource(res, value.Interface(), metaValue.MetaValues, processor.Context)
-			associationProcessor.Start()
-			if !associationProcessor.SkipLeft {
-				field.Set(value.Elem())
-			}
-		} else if field.Kind() == reflect.Slice {
-			var fieldType = field.Type().Elem()
-			var isPtr bool
-			if fieldType.Kind() == reflect.Ptr {
-				fieldType = fieldType.Elem()
-				isPtr = true
-			}
-
-			value := reflect.New(fieldType)
-			associationProcessor := DecodeToResource(res, value.Interface(), metaValue.MetaValues, processor.Context)
-			associationProcessor.Start()
-			if !associationProcessor.SkipLeft {
-				if !reflect.DeepEqual(reflect.Zero(fieldType).Interface(), value.Elem().Interface()) {
-					if isPtr {
-						field.Set(reflect.Append(field, value))
-					} else {
-						field.Set(reflect.Append(field, value.Elem()))
+		if metaValue.MetaValues != nil && len(metaValue.MetaValues.Values) > 0 {
+			if res := metaValue.Meta.GetResource(); res != nil && !reflect.ValueOf(res).IsNil() {
+				field := reflect.Indirect(reflect.ValueOf(processor.Result)).FieldByName(meta.GetFieldName())
+				if utils.ModelType(field.Addr().Interface()) == utils.ModelType(res.NewStruct()) {
+					if _, ok := field.Addr().Interface().(sql.Scanner); !ok {
+						decodeMetaValuesToField(res, field, metaValue, processor.Context)
 					}
 				}
 			}
@@ -124,24 +107,7 @@ func (processor *processor) decode() (errors []error) {
 	return
 }
 
-func (processor *processor) Commit() error {
-	var errors qor.Errors
-	errors.AddError(processor.decode()...)
-	if processor.checkSkipLeft(errors.GetErrors()...) {
-		return nil
-	}
-
-	for _, fc := range processor.Resource.GetResource().processors {
-		if err := fc(processor.Result, processor.MetaValues, processor.Context); err != nil {
-			if processor.checkSkipLeft(err) {
-				break
-			}
-			errors.AddError(err)
-		}
-	}
-	return errors
-}
-
+// Start start processor
 func (processor *processor) Start() error {
 	var errors qor.Errors
 	processor.Initialize()
@@ -152,4 +118,23 @@ func (processor *processor) Start() error {
 		return errors
 	}
 	return nil
+}
+
+// Commit commit data into result
+func (processor *processor) Commit() error {
+	var errors qor.Errors
+	errors.AddError(processor.decode()...)
+	if processor.checkSkipLeft(errors.GetErrors()...) {
+		return nil
+	}
+
+	for _, p := range processor.Resource.GetResource().Processors {
+		if err := p.Handler(processor.Result, processor.MetaValues, processor.Context); err != nil {
+			if processor.checkSkipLeft(err) {
+				break
+			}
+			errors.AddError(err)
+		}
+	}
+	return errors
 }

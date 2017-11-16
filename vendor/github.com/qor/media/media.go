@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"image"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/jinzhu/gorm"
@@ -26,19 +27,13 @@ type Media interface {
 	GetCropOption(name string) *image.Rectangle
 
 	Store(url string, option *Option, reader io.Reader) error
-	Retrieve(url string) (FileInterface, error)
+	Retrieve(url string) (*os.File, error)
 
 	IsImage() bool
 
 	URL(style ...string) string
 	Ext() string
 	String() string
-}
-
-// FileInterface media file interface
-type FileInterface interface {
-	io.ReadSeeker
-	io.Closer
 }
 
 // Size is a struct, used for `GetSizes` method, it will return a slice of Size, media library will crop images automatically based on it
